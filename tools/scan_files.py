@@ -20,7 +20,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from wpr_common import CORE_DIRS, check_site, walk_files  # noqa: E402
+from wpr_common import CORE_DIRS, check_site, spam_terms, walk_files  # noqa: E402
 
 PHP_EXT = (".php", ".phtml", ".php3", ".php4", ".php5", ".php7", ".php8", ".pht", ".phar", ".inc", ".suspected")
 ODD_PHP_EXT = PHP_EXT[1:]
@@ -41,7 +41,18 @@ RULES = [  # (severity, name, regex, applies_to)
     ("HIGH", "include-of-escaped-path", r"@?(?:include|require)(?:_once)?\s*\(?\s*['\"][^'\"]*\\(?:x[0-9a-fA-F]{2}|[0-7]{3})", "code"),
     ("HIGH", "write-file-from-input", r"(?:file_put_contents|fwrite|fputs)\s*\([^;]{0,200}" + SG, "code"),
     ("HIGH", "preg-replace-eval-modifier", r"preg_replace\s*\(\s*['\"](.)[^'\"]*\1[imsxuADSUX]*e[imsxuADSUX]*['\"]", "code"),
+    ("HIGH", "create-function-from-input", r"create_function\s*\([^;]{0,300}" + SG, "code"),
     ("MED", "create-function", r"create_function\s*\(", "code"),
+    # Remote-include stager: a tiny file that downloads code and includes it, leaving no
+    # payload on disk to find. Some hide the lookup with DNS-over-HTTPS.
+    ("HIGH", "dns-over-https-in-php", r"CURLOPT_DOH_URL", "code"),
+    ("HIGH", "remote-code-include", r"(?:curl_exec|file_get_contents\s*\(\s*['\"]https?:|fopen\s*\(\s*['\"]https?:)"
+                                    r".{0,600}?(?:include|require)(?:_once)?\s*\(?\s*\$", "code"),
+    ("MED", "tmpfile-include", r"tmpfile\s*\(\s*\).{0,400}?stream_get_meta_data.{0,300}?(?:include|require)", "code"),
+    # Hides an attacker's admin account from Users > All Users.
+    ("HIGH", "hides-users-from-admin", r"users_list_table_query_args", "code"),
+    ("MED", "alters-user-queries", r"pre_user_query|pre_get_users|views_users", "code"),
+    ("MED", "phpinfo-page", r"^\s*<\?php\s*phpinfo\s*\(\s*\)\s*;?\s*(?:\?>)?\s*$", "code"),
     ("MED", "long-encoded-blob", r"['\"][A-Za-z0-9+/=]{3000,}['\"]", "code"),
     ("MED", "hex-escaped-string", r"(?:\\x[0-9a-fA-F]{2}){40,}", "code"),
     ("MED", "chr-chain", r"(?:chr\s*\(\s*\d+\s*\)\s*\.\s*){12,}", "code"),
@@ -53,11 +64,15 @@ RULES = [  # (severity, name, regex, applies_to)
     ("MED", "js-document-write-unescape", r"document\.write\s*\(\s*unescape\s*\(", "js"),
     ("MED", "js-injected-script-loader", r"createElement\(\s*['\"]script['\"]\s*\).{0,300}(?:atob|fromCharCode|\\x[0-9a-f]{2})", "js"),
     ("HIGH", "htaccess-auto-prepend", r"auto_(?:prepend|append)_file", "config"),
+    # Lets scripts in any language run over HTTP, bypassing every PHP restriction
+    # (web-shell kits ship a CGI helper folder with exactly this .htaccess).
+    ("HIGH", "htaccess-enables-cgi", r"Options[^\n]*\+?ExecCGI|cgi-script|AddHandler[^\n]*\.(?:alfa|pl|py|cgi|sh)\b", "config"),
     ("HIGH", "htaccess-image-as-php", r"(?:AddHandler|AddType|SetHandler)[^\n]*(?:php|x-httpd)[^\n]*|(?:AddHandler|AddType)[^\n]*\.(?:jpe?g|png|gif|ico|txt)", "config"),
     ("MED", "htaccess-search-engine-redirect", r"RewriteCond\s+%\{HTTP_(?:USER_AGENT|REFERER)\}[^\n]*(?:google|bing|yahoo|yandex|baidu)", "config"),
     ("MED", "htaccess-redirect-offsite", r"RewriteRule\s+[^\n]*https?://", "config"),
 ]
-COMPILED = [(s, n, re.compile(r, re.I | re.S), k) for s, n, r, k in RULES]
+COMPILED = [(s, n, re.compile(r, re.I | re.S | re.M), k) for s, n, r, k in RULES]
+KNOWN_PREPEND = r"auto_prepend_file\s*=?\s*['\"]?[^\n'\"]*(?:wordfence-waf\.php|aios-bootstrap\.php)"
 
 
 def kind(rel):
@@ -99,22 +114,49 @@ def scan(site, include_core):
             add("HIGH", "odd-php-extension", rel, "runnable PHP under an unusual extension")
         if base.startswith(".") and low.endswith(PHP_EXT):
             add("MED", "hidden-php-file", rel)
-        if re.search(r"\.php\.[a-z0-9]+$|\.(?:jpe?g|png|gif|ico)\.php$", base):
+        if re.search(r"\.php\.[a-z0-9]+$|\.(?:jpe?g|png|gif|ico)\.ph", base):
             add("HIGH", "double-extension", rel)
+        if re.fullmatch(r"[0-9a-f]{32}\.php", base):
+            add("MED", "random-hex-php-name", rel, "32-hex-character PHP filename")
+        if "/alfa_data/" in "/" + low + "/" or low.endswith(".alfa"):
+            add("HIGH", "webshell-cgi-kit", rel, "ALFA_DATA folder / .alfa CGI helper from a web-shell kit")
+        if low.endswith((".pl", ".py", ".cgi", ".sh", ".bash", ".so", ".exe", ".dll")):
+            add("HIGH" if "/uploads/" in "/" + low or "/tmp/" in "/" + low else "MED",
+                "script-or-binary-in-site", rel, "WordPress never needs these; tell your host if found in tmp/")
+        if re.fullmatch(r"google[0-9a-f]{8,}\.html|bing(?:siteauth)?\.xml|yandex_[0-9a-f]+\.html", base):
+            add("MED" if "/" not in rel else "HIGH", "search-console-verification-file", rel,
+                "proves ownership of the site (or of this folder) to a search engine; confirm it is the owner's")
 
         k = kind(rel)
-        if k is None and not low.endswith(IMAGE_EXT + (".txt", ".log", ".tmp")):
-            continue
         try:
             with open(path, "rb") as f:
-                text = f.read(MAX_READ).decode("utf-8", "replace")
+                raw = f.read(MAX_READ)
         except OSError:
             continue
+        if raw[:4] == b"\x7fELF" or (raw[:2] == b"MZ" and (low.endswith((".exe", ".dll", ".bin")) or "." not in base)):
+            add("HIGH", "executable-binary", rel, "compiled program inside a website (exploit or miner?)")
+            continue
+        if k is None and not low.endswith(IMAGE_EXT + (".txt", ".log", ".tmp")):
+            continue
+        text = raw.decode("utf-8", "replace")
 
         if k is None:  # image / text file: should never contain PHP
-            if "<?php" in text or re.search(r"<\?=|<\?\s*(?:eval|@)", text):
+            # Only "<?php" counts in images: "<?=" occurs by chance in compressed image
+            # data and produced hundreds of false positives per site in real cleanups.
+            if re.search(r"<\?php", text, re.I) or (not low.endswith(IMAGE_EXT) and re.search(r"<\?=|<\?\s*(?:eval|@)", text)):
                 add("HIGH", "php-hidden-in-non-php-file", rel, "contents start PHP code")
             continue
+        if low.endswith((".html", ".htm", ".txt")):
+            terms = spam_terms(text)
+            if len(terms) >= 3:
+                add("HIGH", "spam-page", rel, "spam terms: " + ", ".join(terms[:6]))
+            depth = rel.count("/")
+            if base in ("index.html", "index.htm") and depth == 0:
+                add("HIGH" if len(terms) >= 3 else "MED", "static-home-page", rel,
+                    "usually served INSTEAD of WordPress's home page")
+            if base in ("index.html", "index.htm") and depth >= 1 and not low.startswith("wp-"):
+                add("HIGH" if len(terms) >= 3 else "MED", "static-page-folder", rel,
+                    "a folder with its own index.html is served INSTEAD of the WordPress page at that URL")
         if k == "code" and base == "index.php" and len(text) < 200 and "silence" in text.lower():
             continue  # the stock "Silence is golden" placeholder
         if k == "js" and low.endswith((".html", ".htm")) and re.search(r"<\?php", text):
@@ -128,6 +170,11 @@ def scan(site, include_core):
                 continue
             m = rx.search(text)
             if m:
+                if name == "htaccess-auto-prepend" and re.search(KNOWN_PREPEND, text, re.I):
+                    add("MED", "auto-prepend-security-plugin", rel,
+                        "points at a known security plugin's firewall (Wordfence / All-In-One Security); "
+                        "normal if that plugin is installed")
+                    continue
                 add(sev, name, rel, snippet(text, m))
     return hits
 

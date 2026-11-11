@@ -34,7 +34,10 @@ logs and often include or sell malware cleanup. Have the human open a ticket ask
 - Do you offer malware cleanup on this plan?
 - Which files and accounts on this site are yours? (Managed hosts install their own
   mu-plugins, drop-ins and wp-config.php lines. See `docs/managed-hosts.md`.)
-- Can you send access/error logs for the last 30 days? (The entry point is usually visible there.)
+- Can you send access/error logs for the last 30 days? (The entry point is usually visible
+  there. Ask **now**: some hosts keep logs only a few days.)
+- Are any files in this account permission `000` or owned by root? (That is usually the host's
+  own containment of something they already found. Don't fight it; ask what they found.)
 - Do you have a backup from **before** the infection date?
 
 Then carry on in parallel. Don't wait.
@@ -45,7 +48,17 @@ Before cleaning, have the human change the credentials the attacker may hold. Ot
 they walk back in after the cleanup:
 - hosting control panel / user portal password (and turn on 2FA)
 - SFTP/SSH passwords; remove SSH keys nobody recognises
-- the database password (on managed hosts this is often host-controlled; ask)
+- the database password (on managed hosts this is often host-controlled; ask). **Assume it is
+  stolen:** malware reads `wp-config.php` first, and attackers have logged straight into the
+  database with it to re-add (or delete, to cover their tracks) admin accounts.
+- **FTP/SFTP accounts:** delete any nobody can explain. FTP passwords are usually stolen
+  *from a PC* (info-stealer malware on the owner's, client's or agency's computer). Have
+  everyone with access run a malware scan on their computer **before** typing new passwords.
+- **Domain registrar:** log in, turn on 2FA and the transfer lock, and check the nameservers
+  are the ones the owner expects. Hijacking the domain at the registrar needs no web shell.
+- **Every other site in the same hosting account counts as compromised too.** A shell on one site can
+  usually read the others' wp-config.php. Plan to scan all of them.
+
 WordPress passwords and salts are rotated later, in Step 6, because the clean build
 replaces them anyway.
 
@@ -55,7 +68,9 @@ Need: **all files** (the folder that holds `wp-config.php`, including dotfiles l
 `.htaccess` and `.user.ini`) and a **database export** (`.sql`).
 
 - **SFTP** (FileZilla, WinSCP, `sftp`, `rsync`): download the whole site root. Turn on
-  "show hidden files".
+  "show hidden files". If you can see the folder **above** the site root (the account's home
+  folder), download that too, apart from other sites' folders: backdoors and stagers have
+  been found there, outside every scan that only looked at the site.
 - **Host backup download:** many hosts let you download a backup as a zip. WP Engine's
   backup zips usually include the database at `wp-content/mysql.sql`.
 - **Database:** phpMyAdmin → Export → Quick → SQL, or `wp db export` over SSH if the host
@@ -85,7 +100,9 @@ the Linux Malware Detect and SaneSecurity signatures), YARA with php-malware-fin
 rules, and WP-CLI's core checksum check, using whichever are installed. See
 `docs/scanners.md`.
 
-How to read the results:
+How to read the results (attack techniques behind each finding:
+[docs/attack-patterns.md](docs/attack-patterns.md); expected hits that are NOT malware:
+[docs/false-positives.md](docs/false-positives.md)):
 - **verify_core.py**: any MODIFIED or EXTRA file in `wp-admin/`, `wp-includes/` or the root
   is malware until proven otherwise. Core is never edited legitimately.
 - **verify_extensions.py**: `OK` means byte-identical to wordpress.org. `DIFFERS` means
@@ -94,11 +111,30 @@ How to read the results:
   look, but on a managed host some are the host's own (see `docs/managed-hosts.md`).
 - **scan_files.py**: HIGH hits in `uploads/`, disguised extensions, `.htaccess` /
   `.user.ini` prepend tricks and code after `wp-settings.php` in wp-config are almost always
-  real. Read each one.
-- **scan_db.py**: confirm **every ADMIN** with the site owner. A recently registered admin
-  with a generic name (`wp_support`, `admin2`, `system`) is the classic attacker account. Check
-  siteurl/home, open registration, offsite `<script src>` in posts/options, and cron hooks
-  that no installed plugin explains.
+  real. Read each one. Also expect:
+  - `remote-code-include` / `dns-over-https-in-php`: a small stager that fetches its code
+    from elsewhere. There is no payload to find; the file itself is the backdoor.
+  - `htaccess-enables-cgi` / `webshell-cgi-kit`: scripts that run without PHP. Deleting the
+    PHP shell alone leaves these working.
+  - `static-page-folder` / `spam-page` / `search-console-verification-file`: spam folders
+    whose `index.html` is served **instead of** the real WordPress page at that URL.
+  - `executable-binary` / `script-or-binary-in-site` in a `tmp/` folder: possibly a server
+    exploit. **Tell the host the same day.**
+- **Names and sizes mean nothing.** Backdoors were named `cache.php`, `sitemap.php`,
+  `config.php`, and sat inside official-looking paths like `wp-includes/SimplePie/`. Payload
+  sizes matched dozens of real images. Judge by content and by checksum (verify_*.py).
+- **scan_db.py**: confirm **every ADMIN-level account** with the site owner. Admin-level means
+  the administrator role, **any role whose definition was given admin powers** (attackers
+  quietly give "editor" `install_plugins` or `manage_options`), capabilities granted to one user
+  directly, and multisite super admins. `SUSPECT` marks red flags: recent sign-up, generic
+  name (`wp_support`, `admin2`, `maintenance-user`), impossible registration date (row inserted
+  by hand), several admins created within seconds of each other (scripted), never authored
+  anything. Also check **application passwords**: an attacker who adds one to a *real* admin
+  keeps API access after every password reset. Then check siteurl/home, open registration,
+  default role, spam rows, offsite `<script src>`, and cron hooks no installed plugin explains.
+- **A clean admin list proves nothing.** Attackers have deleted their own admin accounts
+  (straight in the database, with the stolen password) once their shells were found. The
+  way in, not the account list, decides whether the site is safe.
 
 **Find the way in.** Note in the log which of these is most likely: an outdated plugin or
 theme with a known hole (look up each `site had X.Y` version against WPScan or Patchstack
@@ -145,6 +181,15 @@ WordPress data. If you only have phpMyAdmin, write the SQL for the human to revi
 
 - **Rogue admins:** `wp user delete <id> --reassign=<owner id>` (or delete in wp-admin
   and attribute content to the owner). Downgrade admins who don't need to be admins.
+  Confirm each one with the owner first: real users have been demoted by automated cleanup.
+- **Tampered roles:** for default roles, `wp role reset editor author contributor subscriber`
+  restores WordPress's capabilities (`wp role reset --all` also resets administrator).
+  Delete custom roles no plugin explains (`wp role delete <role>`, after moving its users).
+  Remove capabilities granted to single users: `wp user remove-cap <user> <cap>`.
+- **Application passwords:** `wp user application-password list <user>` for every
+  admin-level user. Delete any the owner didn't create (`wp user application-password delete
+  <user> <uuid>`, or `--all`), or in wp-admin → Users → Profile → Application Passwords.
+- **Multisite super admins:** `wp super-admin list`; `wp super-admin remove <login>`.
 - **Settings:** fix `siteurl`/`home` if hijacked. Set `users_can_register` = 0 unless the
   site needs it, and `default_role` = subscriber.
 - **Injected scripts in posts/options/widgets:** edit them out in wp-admin, or with
@@ -164,6 +209,10 @@ WordPress data. If you only have phpMyAdmin, write the SQL for the human to revi
    `wp-content`, root `*.php`, `.htaccess`, `.user.ini`), **except** files the host owns
    (on managed hosts: wp-config.php and the host's mu-plugins, plus anything support told
    you to keep). Overwriting isn't enough because extra backdoor files would survive.
+   **Spam folders** (`static-page-folder`) must be deleted entirely. Renamed-in-place
+   folders kept serving spam, and an **empty** folder still hides the real WordPress page
+   at that URL. Keep evidence copies **outside** the web root, never inside it.
+   **Never "fix" an error by deleting a protective rule** such as `Options -Indexes`.
 3. Upload `work/clean/` (SFTP, or the host's deploy method).
 4. On a managed host, paste the new salts from `clean.report.md` into the host's wp-config.php
    (or `wp config shuffle-salts` if the host's WP-CLI allows it). This logs everyone out.
@@ -180,8 +229,14 @@ WordPress data. If you only have phpMyAdmin, write the SQL for the human to revi
   (`curl -A "Googlebot" https://site/`). Spam and redirects often show only to
   search engines or first-time visitors.
 - Search `site:clientsite.com` on Google for spam pages (pharma, casino, Japanese keywords).
-- **Google Search Console** → Security issues → request a review once clean. Check the
-  Google Safe Browsing status page and any blocklists the browser warning named.
+- For every spam folder you removed, load the **real** URL: it must show the WordPress page
+  (200), not 403/404.
+- **Google Search Console** → Settings → Users and permissions: remove owners and users the
+  site owner doesn't know. Attackers verify their spam folders with planted `googleXXXX.html`
+  files. Delete those files, then use **Removals** for the spam URLs, and Security issues →
+  request a review. Check the Google Safe Browsing status page and any blocklists the
+  browser warning named.
+- Repeat the scans for **every other site in the same hosting account.**
 
 ## Step 8: keep it clean
 

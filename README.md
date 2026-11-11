@@ -43,12 +43,16 @@ ever executed.
 | `tools/verify_core.py SITE` | Compares every core file with wordpress.org's official checksums: modified, missing, and extra (planted) files. |
 | `tools/verify_extensions.py SITE` | Compares every plugin and theme with the same version on wordpress.org. Lists premium/custom code you must replace from the vendor, fake plugins, mu-plugins and drop-ins. |
 | `tools/scan_files.py SITE` | Heuristic scan for obfuscated eval, code run from request input, PHP in uploads or disguised as images, `.htaccess`/`.user.ini` tricks, injected JS. |
-| `tools/scan_db.py dump.sql --domain site.com` | Reads the SQL export as text (no database needed): all users with admins marked, hijacked settings, open registration, cron hooks, injected scripts and iframes. |
+| `tools/scan_db.py dump.sql --domain site.com` | Reads the SQL export as text (no database needed): every admin-level account (including tampered roles, direct capabilities and super admins) with red flags, application passwords, hijacked settings, cron hooks, spam rows, injected scripts. |
 | `tools/rebuild.py HACKED CLEAN [--managed-host]` | Builds a clean site: fresh core, plugins and themes from wordpress.org, only verified media from uploads, new wp-config salts. Writes a report of what needs a human. |
 | `tools/public_scanners.sh SITE` | Runs ClamAV (+ Linux Malware Detect and SaneSecurity signatures), YARA + php-malware-finder, and WP-CLI checksums, whichever are installed. See [docs/scanners.md](docs/scanners.md). |
 
 `python3 tests/run_tests.py` downloads real WordPress, plants harmless fake malware, and
 checks that every tool catches it and the rebuild leaves it behind.
+
+The checks come from a real multi-site shared-hosting cleanup: see
+[docs/attack-patterns.md](docs/attack-patterns.md) for the techniques and
+[docs/false-positives.md](docs/false-positives.md) for what not to "fix".
 
 ## Limits
 

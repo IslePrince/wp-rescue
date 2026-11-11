@@ -14,6 +14,20 @@ UA = "wp-rescue/1.0 (+https://github.com/IslePrince/wp-rescue)"
 CORE_DIRS = ("wp-admin", "wp-includes")
 
 
+# Words that SEO-spam injections use. Three or more distinct ones in one page or row is
+# almost never legitimate (a real gambling or pharmacy site will trip it: use judgement).
+SPAM_TERMS = ("slot gacor", "slot online", "situs slot", "judi online", "judi slot", "togel", "sbobet",
+              "maxwin", "rtp live", "slot88", "pragmatic play", "bandar togel", "agen slot", "casino online",
+              "online casino", "poker online", "viagra", "cialis", "levitra", "kamagra", "tramadol",
+              "replica watches", "cheap jerseys", "payday loan", "essay writing service", "buy followers",
+              "bocoran", "deposit pulsa", "zeus slot", "scatter hitam")
+
+
+def spam_terms(text):
+    low = text.lower()
+    return [t for t in SPAM_TERMS if t in low]
+
+
 def die(msg, code=2):
     print("error: " + msg, file=sys.stderr)
     sys.exit(code)
@@ -132,6 +146,55 @@ def walk_files(root):
             p = os.path.join(d, f)
             if os.path.isfile(p) and not os.path.islink(p):
                 yield os.path.relpath(p, root).replace(os.sep, "/")
+
+
+def php_unserialize(text):
+    """Parse PHP serialize() output (what WordPress stores in options/usermeta).
+    Returns Python dict/list/str/int/float/bool/None, or None if it is not valid.
+    Objects are returned as dicts. Never executes anything."""
+    data = text.encode("utf-8") if isinstance(text, str) else text
+    pos = [0]
+
+    def read_until(ch):
+        end = data.index(ch, pos[0])
+        val = data[pos[0]:end]
+        pos[0] = end + 1
+        return val.decode("utf-8", "replace")
+
+    def value():
+        t = data[pos[0]:pos[0] + 1]
+        pos[0] += 2  # type char + ':' (or ';' for N)
+        if t == b"N":
+            return None
+        if t == b"b":
+            return read_until(b";") == "1"
+        if t == b"i":
+            return int(read_until(b";"))
+        if t == b"d":
+            return float(read_until(b";"))
+        if t == b"s":
+            n = int(read_until(b":"))
+            s = data[pos[0] + 1:pos[0] + 1 + n]  # skip opening quote
+            pos[0] += n + 3                        # quote + bytes + quote + ';'
+            return s.decode("utf-8", "replace")
+        if t in (b"a", b"O"):
+            if t == b"O":
+                read_until(b":")  # class name length
+                read_until(b":")  # "ClassName"
+            n = int(read_until(b":"))
+            pos[0] += 1  # '{'
+            out = {}
+            for _ in range(n):
+                k = value()
+                out[k] = value()
+            pos[0] += 1  # '}'
+            return out
+        raise ValueError("unknown type %r" % t)
+
+    try:
+        return value()
+    except (ValueError, IndexError):
+        return None
 
 
 def check_site(site):

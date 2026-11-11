@@ -207,7 +207,8 @@ def main():
                 skipped.append(rel + "  (type not allowed)")
                 continue
             head = read_head(src, 1 << 20)
-            if "<?php" in head or "<?=" in head:
+            # "<?=" occurs by chance in compressed image data, so only "<?php" counts in images.
+            if re.search(r"<\?php", head, re.I) or (ext in RISKY_MEDIA and "<?=" in head):
                 skipped.append(rel + "  (contains PHP)")
                 continue
             if ext in RISKY_MEDIA and re.search(r"<script|javascript:|on(?:load|error)\s*=|eval\s*\(", head, re.I):

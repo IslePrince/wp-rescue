@@ -39,6 +39,8 @@ yours?" is normal and quick.
   wp plugin verify-checksums --all
   wp user list --role=administrator --fields=ID,user_login,user_email,user_registered
   wp user session destroy --all
+  wp user application-password list <user>
+  wp role list --fields=role,name
   wp cron event list
   wp db export - > /dev/null     # or download via phpMyAdmin
   ```

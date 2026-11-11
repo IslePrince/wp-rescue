@@ -11,7 +11,9 @@ sources, then guide the upload.
 
 **The full playbook is [AGENTS.md](AGENTS.md) in this folder. Read it before doing anything
 and follow its steps in order.** Managed hosts (WP Engine etc.): also read
-[docs/managed-hosts.md](docs/managed-hosts.md). Signature scanners: [docs/scanners.md](docs/scanners.md).
+[docs/managed-hosts.md](docs/managed-hosts.md). Signature scanners: [docs/scanners.md](docs/scanners.md). Real attack techniques:
+[docs/attack-patterns.md](docs/attack-patterns.md). Expected non-malware hits:
+[docs/false-positives.md](docs/false-positives.md).
 
 ## Paths
 
@@ -37,5 +39,7 @@ working folder. They are Python 3.8+ standard library only and need nothing inst
 3. Keep an untouched backup of the hacked state before any change.
 4. Ask the human before anything destructive on the live server.
 5. Never paste site secrets (wp-config.php credentials, keys) anywhere public.
-6. Rebuild from official sources rather than hand-cleaning old files. Removing only the
+6. A clean admin list proves nothing, and neither do zero scanner hits. Say which kinds of attack
+   you checked for, and find the way in.
+7. Rebuild from official sources rather than hand-cleaning old files. Removing only the
    malware you found leaves behind the malware you missed.
