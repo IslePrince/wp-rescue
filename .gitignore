@@ -1,0 +1,11 @@
+# Never commit client data into this repo by accident.
+work/
+hacked/
+clean/
+*.report.md
+*.sql
+*.sql.gz
+*.zip
+scan-results-*/
+__pycache__/
+CLEANUP-LOG.md
