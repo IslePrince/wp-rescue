@@ -21,6 +21,14 @@ what's wrong, a clean copy is rebuilt from official sources, and you upload it b
    database is ../dump.sql. Their domain is clientsite.com and they host on WP Engine.
    Follow the playbook."*
 
+**Or install it as a Claude skill** so it works from any folder: Claude loads it by
+itself when you say a site is hacked.
+```
+git clone https://github.com/IslePrince/wp-rescue ~/.claude/skills/wp-rescue
+```
+(For one project only, clone it into that project's `.claude/skills/wp-rescue` instead.
+For the Claude apps, zip the folder and upload it in the Skills section of Claude's settings.)
+
 The agent follows **[AGENTS.md](AGENTS.md)**: lock the doors, scan, rebuild, clean the
 database, swap the files, rotate passwords and keys, verify, harden. It asks you before
 anything destructive on the live site.
